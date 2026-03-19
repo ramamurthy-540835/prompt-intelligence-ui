@@ -1,1 +1,23 @@
-.aider*
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Env
+.env
+.env.local
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
