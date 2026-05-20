@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE `your_project_id.your_dataset_id.ekf.customers` (
+CREATE OR REPLACE TABLE `ctoteam.ekf.customers` (
     customer_id STRING NOT NULL,
     external_crm_id STRING,
     first_name STRING,
@@ -14,7 +14,5 @@ CLUSTER BY loyalty_tier, last_purchase_date;
 
 OPTIONS (
     description = 'Unified customer master record',
-    labels = {
-        'retail_business_domain': 'customers'
-    }
+    labels = [('retail_business_domain', 'customers')]
 );

@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE `your_project_id.your_dataset_id.ekf.products` (
+CREATE OR REPLACE TABLE `ctoteam.ekf.products` (
     product_sku STRING NOT NULL,
     product_name STRING NOT NULL,
     brand STRING,
@@ -11,7 +11,5 @@ CLUSTER BY brand, category_l1;
 
 OPTIONS (
     description = 'Curated product catalog',
-    labels = {
-        'retail_business_domain': 'products'
-    }
+    labels = [('retail_business_domain', 'products')]
 );

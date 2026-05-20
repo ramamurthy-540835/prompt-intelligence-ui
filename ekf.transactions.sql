@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE `your_project_id.your_dataset_id.ekf.transactions` (
+CREATE OR REPLACE TABLE `ctoteam.ekf.transactions` (
     transaction_id STRING NOT NULL,
     transaction_time TIMESTAMP NOT NULL,
     customer_id STRING,
@@ -17,7 +17,5 @@ CLUSTER BY customer_id, product_sku;
 
 OPTIONS (
     description = 'Atomic-level transactions',
-    labels = {
-        'retail_business_domain': 'transactions'
-    }
+    labels = [('retail_business_domain', 'transactions')]
 );
