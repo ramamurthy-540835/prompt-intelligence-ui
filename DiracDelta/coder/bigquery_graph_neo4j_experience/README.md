@@ -37,4 +37,4 @@ The implementation is broken down into sequential SQL files:
 
 1.  **`01_create_base_tables.sql`**: Contains the DDL to create the physical BigQuery tables for `users`, `prompts`, and `executions`.
 2.  **`02_create_property_graph.sql`**: Contains the `CREATE PROPERTY GRAPH` statement. This script defines the graph schema over the base tables and creates grain-locked **Measures** for `cost`, `latency`, and `tokens` on the `executions` node to ensure accurate aggregations.
-3.  **`03_query_examples.sql`**: Provides example queries demonstrating how to use the graph for both structural pattern matching (like Neo4j's Cypher) and safe metric aggregation using the defined measures.
+3.  **`03_query_examples.sql`**: Provides a standard BigQuery-compatible example query using `GRAPH_TABLE`. It demonstrates how to perform aggregations (e.g., `SUM(cost)`) over matched graph rows using a standard `GROUP BY` clause.

@@ -29,8 +29,5 @@ CREATE OR REPLACE TABLE `prism_prompt_catalog.executions` (
     latency_ms          INT64,
     tokens_used         INT64,
     cost                FLOAT64,
-    PRIMARY KEY (execution_id) NOT ENFORCED,
-    FOREIGN KEY (user_id) REFERENCES `prism_prompt_catalog.users`(user_id) NOT ENFORCED,
-    FOREIGN KEY (prompt_id) REFERENCES `prism_prompt_catalog.prompts`(prompt_id) NOT ENFORCED,
-    FOREIGN KEY (next_execution_id) REFERENCES `prism_prompt_catalog.executions`(execution_id) NOT ENFORCED
+    PRIMARY KEY (execution_id) NOT ENFORCED
 );
