@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import AgentPipeline from '../components/AgentPipeline';
 import PromptGalleryPanel from '../components/PromptGalleryPanel';
+import { CodingAgentView } from '../components/CodingAgentView';
+import { PieChart, Pie, Cell, Tooltip, Legend } from 'recharts';
 
 const FP_CATEGORY_COLORS: Record<string, string> = {
   functional: '#2563EB',
@@ -21,6 +23,12 @@ const FP_CATEGORY_COLORS: Record<string, string> = {
   frontend: '#7c3aed'
 };
 
+type EstimationError = {
+  type: 'preflight' | 'runtime';
+  message: string;
+  detail?: string;
+};
+
 export default function Home() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -29,8 +37,12 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [actionLog, setActionLog] = useState<string>('');
   const [data, setData] = useState<any>(null);
-  const [selectedUid, setSelectedUid] = useState<string>('vertexai:3381323161097207808');
-  const [activeTab, setActiveTab] = useState<'overview' | 'ai-estimation' | 'audit' | 'report'>('overview');
+  const [selectedUid, setSelectedUid] = useState<string | null>(null);
+  const [promptFingerprint, setPromptFingerprint] = useState<string>('—');
+  const [activeTab, setActiveTab] = useState<'overview' | 'ai-estimation' | 'audit' | 'report' | 'coding'>('overview');
+
+  // 3-Stage flow state
+  const [stage, setStage] = useState<1 | 2 | 3>(1);
 
   // New: Prompt list from BigQuery via backend
   const [promptList, setPromptList] = useState<any[]>([]);
@@ -46,6 +58,7 @@ export default function Home() {
   const [tokenEstimate, setTokenEstimate] = useState<any>(null);
   const [lastEstimationAt, setLastEstimationAt] = useState<string | null>(null);
   const [repeatMode, setRepeatMode] = useState<string>('first_run');
+  const [estimationError, setEstimationError] = useState<EstimationError | null>(null);
 
   // Fresh run result from the latest "Run AI Estimation" (parsed from stdout for immediate UI update)
   const [latestEstimation, setLatestEstimation] = useState<any>(null);
@@ -69,6 +82,9 @@ export default function Home() {
   const [adcOk, setAdcOk] = useState<boolean | null>(null);
   const [authStatus, setAuthStatus] = useState<any>(null);
   const [adcEmail, setAdcEmail] = useState<string | null>(null);
+
+  // BQ Catalog Status for Stage 1 dashboard
+  const [bqCatalogStatus, setBqCatalogStatus] = useState<any[]>([]);
 
   // FIX 5: active filters for model comparison table
   const [activeProviders, setActiveProviders] = useState<Set<string>>(
@@ -181,15 +197,21 @@ export default function Home() {
         setPromptList(list);
         setBqSource(res.source === 'bigquery' ? 'bigquery' : 'fallback');
 
-        // Respect URL param first, then fall back to first in list or default
-        const match = urlUid && list.find((p: any) => p.uid === urlUid);
-        const toSelect = match ? urlUid : (list[0]?.uid ?? 'vertexai:3381323161097207808');
-
-        setSelectedUid(toSelect);
-        fetchDashboardData(toSelect);
+        // Only auto-select if URL specifies a uid (so default landing with no uid shows the full Stage 1 lakehouse dashboard).
+        // User can pick from left gallery panel or from the BQ table in the dashboard.
+        if (urlUid) {
+          const match = list.find((p: any) => p.uid === urlUid);
+          const toSelect = match ? urlUid : (list[0]?.uid ?? null);
+          if (toSelect) {
+            setSelectedUid(toSelect);
+            fetchDashboardData(toSelect);
+          }
+        } else {
+          // stay null -> show lakehouse dashboard in stage 1
+        }
       })
       .catch(() => {
-        // Fallback
+        // Fallback list only; do not force a selection so that !selectedUid shows the Stage 1 lakehouse dashboard by default
         const defaultUid = 'vertexai:3381323161097207808';
         setPromptList([{
           uid: defaultUid,
@@ -198,8 +220,7 @@ export default function Home() {
           version: 1,
           isActive: true
         }]);
-        setSelectedUid(defaultUid);
-        fetchDashboardData(defaultUid);
+        // leave selectedUid as null (from initial state) unless URL had one (handled in URL watcher)
       });
   }, [mounted]);
 
@@ -287,6 +308,19 @@ export default function Home() {
       })
   }, [mounted])
 
+  // BQ Catalog Status fetch for Stage 1 dashboard (real BQ schema health)
+  useEffect(() => {
+    if (!mounted) return
+    fetch(`/api/bq-catalog-status`)
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.catalog) {
+          setBqCatalogStatus(d.catalog)
+        }
+      })
+      .catch(console.error)
+  }, [mounted])
+
   const triggerAction = async (action: 'refresh' | 'estimate', dryRun: boolean = false) => {
     const uidToUse = selectedUid || 'vertexai:3381323161097207808';
     const sourcePromptId = uidToUse.split(':').pop() || uidToUse;
@@ -297,6 +331,7 @@ export default function Home() {
     
     try {
       if (action === 'estimate') {
+        setEstimationError(null);
         // Already wired to real 8005 backend via run-pipeline (see api/run-pipeline/route.ts)
         const res = await fetch('/api/run-pipeline', {
           method: 'POST',
@@ -304,16 +339,30 @@ export default function Home() {
           body: JSON.stringify({ action, promptId: sourcePromptId, dryRun })
         });
         const json = await safeJson(res);
+        if (res.status === 422 || json.status === 'preflight_failed') {
+          setEstimationError({
+            type: 'preflight',
+            message: json.message || 'Run the pipeline agents first to extract prompt content',
+            detail: 'Go to Stage 2 and click Run All Pipeline first'
+          });
+          setActionLog(`PRE-FLIGHT FAILED\n${json.stdout || ''}\n${json.message || json.error || 'Insufficient prompt data'}`);
+          return;
+        }
         
         let log = `--- STDOUT ---\n${json.stdout || ''}\n`;
         if (json.stderr) log += `\n--- STDERR ---\n${json.stderr}\n`;
         if (!json.success) {
+          setEstimationError({
+            type: 'runtime',
+            message: json.error || 'Execution failed.',
+          });
           log += `\n❌ ERROR: ${json.error || 'Execution failed.'}`;
         } else {
+          setEstimationError(null);
           log += `\n🟢 SUCCESS: Action completed successfully.${dryRun ? ' (dry-run: no writes)' : ''}`;
         }
         setActionLog(log);
-        if (!dryRun) fetchDashboardData(selectedUid);
+        if (!dryRun) fetchDashboardData(selectedUid || undefined);
 
         // === NEW: refresh the UI cards with the *actual* numbers from this run ===
         // FIX 1: always parse (including dry-run stdout which uses short labels) and populate latestEstimation
@@ -377,10 +426,10 @@ export default function Home() {
           log += `\n⚠️ ${json.error || 'Completed with warnings'}`;
         }
         setActionLog(log);
-        fetchDashboardData(selectedUid);
+        fetchDashboardData(selectedUid || undefined);
         // Also re-pull the details for the cards
         // (the selectedUid effect will re-run if we touch it, but force a refetch of details)
-        fetch(`/api/prompt-data?uid=${encodeURIComponent(selectedUid)}`).then(r=>r.json()).then(d=>{
+        fetch(`/api/prompt-data?uid=${encodeURIComponent(selectedUid || 'vertexai:3381323161097207808')}`).then(r=>r.json()).then(d=>{
           setFunctionalPoints(d.functionalPoints ?? null);
           setComplexityBand(d.complexityBand ?? null);
           setTokenEstimate(d.tokenEstimate ?? null);
@@ -603,20 +652,38 @@ export default function Home() {
     Number(latestEstimation?.estimatedCostUsd || 0);
   const tokenSource = tokenEstimate?.source ?? (reportTotalTokens > 0 ? 'report_data' : null);
 
+  // Stage 1 Dashboard data (from galleryPrompts)
+  const stage1Prompts = galleryPrompts.length > 0 ? galleryPrompts : promptList.map((p: any) => ({ ...p, fp: p.fp ?? null, hasEstimation: !!p.hasEstimation }));
+  const totalPrompts = stage1Prompts.length;
+  const estimatedCount = stage1Prompts.filter((p: any) => p.hasEstimation).length;
+  const pendingCount = totalPrompts - estimatedCount;
+  const totalFP = stage1Prompts.reduce((sum: number, p: any) => sum + (p.fp || 0), 0);
+
+  const fpPieData = stage1Prompts
+    .filter((p: any) => p.fp && p.fp > 0)
+    .map((p: any) => ({
+      name: String(p.promptId).slice(0, 8) + '...',
+      value: p.fp
+    }));
+  const PIE_COLORS = ['#2563EB', '#16a34a', '#d97706', '#8b5cf6', '#dc2626', '#ea580c'];
+
   return (
     <>
-      <div style={{display:'flex', height:'100vh', overflow:'hidden'}}>
+      <div style={{display:'flex', height:'100vh', overflow:'hidden', gap:0, padding:0, margin:0, background:'#f0f2f7'}}>
       <PromptGalleryPanel
         backend={process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://10.100.15.31:8005'}
         selectedUid={selectedUid}
         onSelect={(uid) => {
           setSelectedUid(uid)
           router.push(`/?uid=${encodeURIComponent(uid)}`, {scroll: false})
+          if (stage === 1) setStage(2) // auto advance to estimation on select
         }}
+        stage={stage}
+        setStage={setStage}
       />
 
-      <div style={{flex:1, overflowY:'auto'}}>
-      <main className="main-content min-h-screen font-sans px-8 py-6 box-border">
+      <div style={{flex:1, overflowY:'auto', background:'#f0f2f7' /* NO left margin or padding here */}}>
+      <main className="main-content min-h-screen font-sans box-border" style={{margin:0, padding:0}}>
 
       <style jsx>{`
         .analysis-row { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #f3f4f6; font-size:13px; }
@@ -695,13 +762,13 @@ export default function Home() {
             {/* Prominent current Prompt ID display */}
             <div className="flex items-center gap-3">
               <div className="font-mono text-xl font-extrabold text-[#1A2B5E] bg-[#f0f2f7] border border-[#e2e6ed] px-4 py-2 rounded-lg tracking-tight">
-                {selectedUid || 'vertexai:3381323161097207808'}
+                {selectedUid || '— (select from gallery or table)'}
               </div>
 
               {/* Cleaner dropdown for switching prompts - now loads from BigQuery via /api/prompts */}
               <div className="relative inline-block">
                 <select
-                  value={selectedUid || 'vertexai:3381323161097207808'}
+                  value={selectedUid || ''}
                   onChange={handlePromptChange}
                   disabled={loading}
                   className="appearance-none bg-white border border-[#e2e6ed] hover:border-[#d1d5db] text-[#1A2B5E] text-sm font-medium rounded-lg pl-3 pr-8 py-2 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#2563eb]"
@@ -773,785 +840,265 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Tabs */}
-      <div className="flex border-b border-[#e2e6ed] mb-6">
-        {(['overview', 'ai-estimation', 'audit', 'report'] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-6 py-3 font-medium text-sm border-b-2 transition ${
-              activeTab === tab
-                ? 'border-[#E8531E] text-[#1A2B5E] font-semibold'
-                : 'border-transparent text-[#9ca3af] hover:text-[#6b7280]'
-            }`}
-          >
-            {{
-              overview: 'Overview',
-              'ai-estimation': 'AI Estimation',
-              audit: 'Audit',
-              report: 'Report',
-            }[tab]}
-          </button>
-        ))}
+      {/* Stage header (replaces old tabs) */}
+      <div style={{ marginBottom: 16, fontSize: 12, color: '#6b7280' }}>
+        Stage {stage} — {stage === 1 ? 'Prompt Gallery' : stage === 2 ? 'AI Estimation' : 'Coding Agent'}
+        {selectedUid && <span style={{ marginLeft: 8, color: '#2563EB', fontFamily: 'monospace' }}>· {selectedUid.split(':').pop()}</span>}
       </div>
 
-      {/* Main Grid Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
-        {/* Left Column Layout */}
-        <div className={`space-y-8 ${activeTab === 'ai-estimation' ? 'lg:col-span-2' : 'lg:col-span-3'}`}>
-          {activeTab === 'overview' && (
-            <>
-              {/* Analytics Metrics */}
-              <div className="grid grid-cols-[repeat(4,minmax(180px,1fr))] grid-rows-1 gap-4 items-stretch w-full min-w-0 overflow-hidden">
-                <div className="bg-white border border-gray-200 rounded-xl shadow-sm min-h-[120px] min-w-0 px-5 py-4 flex flex-col justify-between">
-                  <div className="text-[11px] uppercase tracking-[0.08em] text-[#6b7280] mb-2 font-bold whitespace-nowrap flex justify-between items-center">
-                    Active Version <Layers className="w-4 h-4 text-[#2563EB]" />
-                  </div>
-                  <div className="text-[26px] leading-[1.1] font-extrabold text-[#1A2B5E] whitespace-normal overflow-visible text-clip">Version {latest?.version_number || '1'}</div>
-                  <p className="text-[12px] text-[#9ca3af] mt-1 font-mono truncate">Run: {latest?.run_id ? `${latest.run_id.slice(0, 13)}...` : 'None'}</p>
+      {/* Main Content — stage driven */}
+      <div className="space-y-8">
+        {/* STAGE 1: GALLERY DASHBOARD or selected prompt overview */}
+        {stage === 1 && (
+          <>
+            {!selectedUid ? (
+              /* Full Dashboard when no prompt selected -- Stage 1 default view (Prompt Governance Lakehouse) */
+              <div style={{padding: '32px 40px 32px 0'}}>
+                <h2 style={{
+                  fontSize: 22, fontWeight: 800, color: '#1A2B5E',
+                  marginBottom: 8
+                }}>
+                  Prompt Governance Lakehouse
+                </h2>
+                <p style={{
+                  fontSize: 13, color: '#6b7280', marginBottom: 28
+                }}>
+                  Select a prompt to begin. Click a prompt in the gallery 
+                  to view details, run pipeline, and estimate.
+                </p>
+
+                {/* Summary stat cards */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(4, 1fr)',
+                  gap: 16, marginBottom: 28
+                }}>
+                  {[
+                    { label: 'Total Prompts', value: galleryPrompts.length,
+                      color: '#2563EB', icon: '📋' },
+                    { label: 'Estimated',
+                      value: galleryPrompts.filter((p: any) => p.hasEstimation).length,
+                      color: '#16a34a', icon: '✓' },
+                    { label: 'Not Estimated',
+                      value: galleryPrompts.filter((p: any) => !p.hasEstimation).length,
+                      color: '#d97706', icon: '○' },
+                    { label: 'Total FP',
+                      value: galleryPrompts.reduce((a: number, p: any) => a + (p.fp ?? 0), 0),
+                      color: '#8b5cf6', icon: '⚡' },
+                  ].map(s => (
+                    <div key={s.label} style={{
+                      background: '#ffffff',
+                      border: '1px solid #e2e6ed',
+                      borderRadius: 12, padding: '20px 24px',
+                      borderTop: `3px solid ${s.color}`,
+                    }}>
+                      <div style={{fontSize: 24, marginBottom: 8}}>{s.icon}</div>
+                      <div style={{
+                        fontSize: 28, fontWeight: 800, color: s.color,
+                        marginBottom: 4
+                      }}>{(s.value || 0).toLocaleString()}</div>
+                      <div style={{fontSize: 12, color: '#6b7280'}}>{s.label}</div>
+                    </div>
+                  ))}
                 </div>
 
-                <div className="bg-white border border-gray-200 rounded-xl shadow-sm min-h-[120px] min-w-0 px-5 py-4 flex flex-col justify-between">
-                  <div className="text-[11px] uppercase tracking-[0.08em] text-[#6b7280] mb-2 font-bold whitespace-nowrap flex justify-between items-center">
-                    Structured Chunks <Code2 className="w-4 h-4 text-[#2563EB]" />
+                {/* BQ Catalog table */}
+                <div style={{
+                  background: '#ffffff', border: '1px solid #e2e6ed',
+                  borderRadius: 12, overflow: 'hidden'
+                }}>
+                  <div style={{
+                    padding: '16px 20px', borderBottom: '1px solid #e2e6ed',
+                    display: 'flex', justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}>
+                    <span style={{
+                      fontSize: 13, fontWeight: 700, color: '#1A2B5E'
+                    }}>
+                      BQ Catalog — Readiness Status
+                    </span>
+                    <span style={{fontSize: 11, color: '#9ca3af'}}>
+                      Source: ctoteam.prism_prompt_catalog
+                    </span>
                   </div>
-                  <div className="text-[26px] leading-[1.1] font-extrabold text-[#1A2B5E] whitespace-normal overflow-visible text-clip">{latest?.chunk_count || '0'} Chunks</div>
-                  <p className="text-[12px] text-[#9ca3af] mt-1">Sequential bounds & overlap verified.</p>
-                </div>
+                  <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
+                    <thead>
+                      <tr style={{background:'#f8f9fb', borderBottom:'2px solid #e2e6ed'}}>
+                        {['Prompt ID','Chunks','Messages','Size','Approved','Readiness','Action']
+                          .map(h => (
+                          <th key={h} style={{
+                            padding:'10px 16px', textAlign:'left',
+                            fontSize:11, fontWeight:700,
+                            textTransform:'uppercase', color:'#6b7280',
+                            letterSpacing:'0.06em'
+                          }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bqCatalogStatus.map((p: any) => {
+                        const cfg = {
+                          full:       {c:'#16a34a', b:'#f0fdf4', l:'✓ Ready'},
+                          partial:    {c:'#d97706', b:'#fffbeb', l:'⚠ Partial'},
+                          registered: {c:'#2563EB', b:'#eff6ff', l:'○ Registered'},
+                          incomplete: {c:'#dc2626', b:'#fef2f2', l:'✗ Incomplete'},
+                        }[p.readiness as string] ?? {c:'#9ca3af',b:'#f9fafb',l:'?'}
 
-                <div className="bg-white border border-gray-200 rounded-xl shadow-sm min-h-[120px] min-w-0 px-5 py-4 flex flex-col justify-between">
-                  <div className="text-[11px] uppercase tracking-[0.08em] text-[#6b7280] mb-2 font-bold whitespace-nowrap flex justify-between items-center">
-                    Prompt Quality <BarChart2 className="w-4 h-4 text-[#2563EB]" />
-                  </div>
-                  <div className="text-[26px] leading-[1.1] font-extrabold text-[#2563EB] whitespace-normal overflow-visible text-clip">{Math.round(sourceQuality)}%</div>
-                  <p className="text-[12px] text-[#9ca3af] mt-1 capitalize">cleaned &amp; validated</p>
+                        return (
+                          <tr key={p.promptUid}
+                            onClick={() => {
+                              const uid = 'vertexai:' + p.promptId;
+                              setSelectedUid(uid);
+                              router.push(`/?uid=${encodeURIComponent(uid)}`, { scroll: false });
+                              setStage(p.readiness === 'full' ? 2 : 2);
+                            }}
+                            style={{
+                              borderBottom:'1px solid #f0f2f7',
+                              cursor:'pointer',
+                              transition:'background 0.1s',
+                            }}
+                            onMouseEnter={e => (e.currentTarget.style.background='#f8f9fb')}
+                            onMouseLeave={e => (e.currentTarget.style.background='')}
+                          >
+                            <td style={{padding:'12px 16px'}}>
+                              <code style={{fontSize:11}}>{p.promptId}</code>
+                            </td>
+                            <td style={{padding:'12px 16px',
+                              fontWeight: p.chunksInBQ > 0 ? 700 : 400,
+                              color: p.chunksInBQ > 0 ? '#16a34a' : '#9ca3af'
+                            }}>
+                              {p.chunksInBQ > 0 ? p.chunksInBQ : '—'}
+                            </td>
+                            <td style={{padding:'12px 16px', fontSize:11, color:'#6b7280'}}>
+                              {p.userMessages > 0
+                                ? `${p.userMessages}u / ${p.modelMessages}m`
+                                : '—'}
+                            </td>
+                            <td style={{padding:'12px 16px', fontSize:11, color:'#6b7280'}}>
+                              {p.rawSizeBytes > 0
+                                ? `${(p.rawSizeBytes/1024/1024).toFixed(1)} MB`
+                                : '—'}
+                            </td>
+                            <td style={{padding:'12px 16px'}}>
+                              {p.approved
+                                ? <span style={{color:'#16a34a', fontWeight:700}}>✓</span>
+                                : <span style={{color:'#9ca3af'}}>—</span>}
+                            </td>
+                            <td style={{padding:'12px 16px'}}>
+                              <span style={{
+                                background: cfg.b, color: cfg.c,
+                                padding:'3px 10px', borderRadius:10,
+                                fontSize:11, fontWeight:700,
+                                border:`1px solid ${cfg.c}33`
+                              }}>{cfg.l}</span>
+                            </td>
+                            <td style={{padding:'12px 16px'}}>
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  const uid = 'vertexai:' + p.promptId;
+                                  setSelectedUid(uid);
+                                  router.push(`/?uid=${encodeURIComponent(uid)}`, { scroll: false });
+                                  setStage(p.readiness === 'full' ? 3 : 2);
+                                }}
+                                style={{
+                                  padding:'4px 12px', borderRadius:6,
+                                  fontSize:11, fontWeight:600, border:'none',
+                                  cursor:'pointer',
+                                  background: p.readiness === 'full' ? '#16a34a' : '#2563EB',
+                                  color:'#ffffff',
+                                }}
+                              >
+                                {p.readiness === 'full' ? '→ Coding' : '▶ Pipeline'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
+            ) : (
+              /* When prompt selected in stage 1: show simple overview (metrics etc) */
+              <>
+                <div style={{ background: '#fff', border: '1px solid #e2e6ed', borderRadius: 10, padding: 16 }}>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Prompt Overview — {(selectedUid || '').split(':').pop()}</h3>
+                  <div style={{ marginTop: 12, fontSize: 13, color: '#374151' }}>
+                    {stage1Prompts.find((pp: any) => pp.uid === selectedUid)?.label || 'Prompt details loaded.'}
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    <button onClick={() => setStage(2)} style={{ padding: '6px 14px', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
+                      Go to AI Estimation →
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </>
+        )}
 
-              {/* NEW: Proper Pipeline UI — replaces flat agent buttons */}
+        {/* STAGE 2: AI ESTIMATION placeholder (full UI can be expanded from existing estimation logic) */}
+        {stage === 2 && (
+          <div style={{ background: '#fff', border: '1px solid #e2e6ed', borderRadius: 10, padding: 16 }}>
+            <h2 style={{ marginTop: 0 }}>AI Estimation for {selectedUid ? selectedUid.split(':').pop() : 'prompt'}</h2>
+            <p style={{ color: '#6b7280' }}>Run the pipeline first when prompt content is missing, then run AI Estimation for tokens and model costs.</p>
+            {estimationError?.type === 'preflight' && (
+              <div style={{
+                background:'#fffbeb', border:'1px solid #fcd34d',
+                borderRadius:8, padding:'16px 20px', margin:'16px 0'
+              }}>
+                <div style={{fontWeight:700, color:'#d97706', marginBottom:6}}>
+                  ⚠ Cannot estimate - prompt data not ready
+                </div>
+                <div style={{fontSize:13, color:'#92400e', marginBottom:10}}>
+                  {estimationError.message}
+                </div>
+                <button
+                  onClick={() => setStage(2)}
+                  style={{
+                    padding:'6px 16px', borderRadius:6, fontSize:12,
+                    border:'none', background:'#2563EB', color:'#fff',
+                    cursor:'pointer', fontWeight:600
+                  }}
+                >
+                  → Go to Pipeline (Stage 2)
+                </button>
+              </div>
+            )}
+            <div style={{ marginTop: 8 }}>
               <AgentPipeline
                 promptUid={effectiveSelectedUid}
                 backend={process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://10.100.15.31:8005'}
                 authStatus={authStatus}
               />
-
-              {/* Scope & Size Details */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <h2 className="text-lg font-bold mb-4 flex items-center gap-2">Prompt Requirements Analysis</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-4">
-                    <div className="flex justify-between border-b border-gray-200 pb-2">
-                      <span className="text-gray-500 text-sm">Functional Points:</span>
-                      <span className="value">{functionalPoints !== null ? `${functionalPoints} FP` : 'N/A'}</span>
-                    </div>
-                    <div className="flex justify-between border-b border-gray-200 pb-2">
-                      <span className="text-gray-500 text-sm">Complexity Band:</span>
-                      <span className="value">{complexityBand || 'N/A'}</span>
-                    </div>
-                    <div className="flex justify-between border-b border-gray-200 pb-2">
-                      <span className="text-gray-500 text-sm">System Instructions:</span>
-                      <span className="value">{latest?.system_present ? '🟢 Present' : '🔴 Absent'}</span>
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    <div className="flex justify-between border-b border-gray-200 pb-2">
-                      <span className="text-gray-500 text-sm">Extraction Hash:</span>
-                      <span className="font-mono text-xs text-gray-500 truncate">{latest?.extracted_hash?.slice(0, 16)}...</span>
-                    </div>
-                    <div className="flex justify-between border-b border-gray-200 pb-2">
-                      <span className="text-gray-500 text-sm">Last Estimation:</span>
-                      <span className="text-xs text-gray-500">{lastEstimationAt ? new Date(lastEstimationAt).toLocaleDateString() : 'pending'}</span>
-                    </div>
-                    <div className="flex justify-between border-b border-gray-200 pb-2">
-                      <span className="text-gray-500 text-sm">Repeat Mode:</span>
-                      <span className="font-mono text-xs text-[#2563EB] font-semibold">{latest?.repeat_mode || 'first_run'}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* FIX 4: FP Category breakdown */}
-                {data?.fpCategories && Object.keys(data.fpCategories).length > 0 && (
-                  <div style={{marginTop:12, borderTop:'1px solid #f0f2f7', paddingTop:8}}>
-                    <div style={{fontSize:11, color:'#6b7280', marginBottom:4, fontWeight:600}}>FP by Category</div>
-                    {Object.entries(data.fpCategories).map(([cat, fp]: any) => (
-                      <div key={cat} style={{display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom:'1px solid #f0f2f7', fontSize:12}}>
-                        <span style={{
-                          color: FP_CATEGORY_COLORS[String(cat).toLowerCase()] ?? '#6b7280',
-                          fontWeight: 600, textTransform: 'capitalize'
-                        }}>{cat}</span>
-                        <span style={{color:'#1A2B5E', fontWeight:700}}>{fp} FP</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-
-          {activeTab === 'audit' && (
-            <div className="space-y-6">
-              {/* Severity Summary Cards */}
-              <div className="grid grid-cols-4 gap-4">
-                <div className="bg-red-950/30 border border-red-900/60 p-4 rounded-lg">
-                  <div className="text-xs text-red-400 font-semibold">CRITICAL</div>
-                  <div className="text-2xl font-bold text-red-300 mt-1">
-                    {audit?.findings_by_severity?.critical || 0}
-                  </div>
-                </div>
-
-                <div className="bg-orange-950/30 border border-orange-900/60 p-4 rounded-lg">
-                  <div className="text-xs text-orange-400 font-semibold">MAJOR</div>
-                  <div className="text-2xl font-bold text-orange-300 mt-1">
-                    {audit?.findings_by_severity?.major || 0}
-                  </div>
-                </div>
-
-                <div className="bg-yellow-950/30 border border-yellow-900/60 p-4 rounded-lg">
-                  <div className="text-xs text-yellow-400 font-semibold">MINOR</div>
-                  <div className="text-2xl font-bold text-yellow-300 mt-1">
-                    {audit?.findings_by_severity?.minor || 0}
-                  </div>
-                </div>
-
-                <div className="bg-blue-950/30 border border-blue-900/60 p-4 rounded-lg">
-                  <div className="text-xs text-blue-400 font-semibold">AUDIT SCORE</div>
-                  <div className="text-2xl font-bold text-blue-300 mt-1">
-                    {(audit?.overall_score || 0).toFixed(1)}%
-                  </div>
-                </div>
-              </div>
-
-              {/* Findings List */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <h3 className="text-sm font-bold mb-4">Findings ({auditFindings.length})</h3>
-                {auditFindings.length === 0 ? (
-                  <p className="text-gray-500 text-sm">No audit findings loaded.</p>
-                ) : (
-                  <div className="space-y-3 max-h-[450px] overflow-y-auto">
-                    {auditFindings.map((finding: any) => (
-                      <div
-                        key={finding.finding_id}
-                        className={`p-3 rounded border-l-4 ${
-                          finding.severity === 'critical'
-                            ? 'bg-red-950/20 border-l-red-500'
-                            : finding.severity === 'major'
-                            ? 'bg-orange-950/20 border-l-orange-500'
-                            : finding.severity === 'minor'
-                            ? 'bg-yellow-950/20 border-l-yellow-500'
-                            : 'bg-blue-950/20 border-l-blue-500'
-                        }`}
-                      >
-                        <div className="flex justify-between items-start mb-1">
-                          <span className="font-semibold text-xs text-gray-900 capitalize">
-                            {finding.severity}
-                          </span>
-                          {finding.file_path && (
-                            <span className="text-xs text-slate-500">{finding.file_path}</span>
-                          )}
-                        </div>
-                        <p className="text-xs text-gray-600 mb-2">{finding.finding_text}</p>
-                        {finding.recommendation && (
-                          <p className="text-xs text-gray-500 italic">
-                            💡 {finding.recommendation}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'report' && (
-            <div className="space-y-6">
-              {/* Report Header + Approval Banner */}
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-lg font-semibold text-gray-900">Full Estimation Report</h2>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleDownloadReport('md')}
-                      className="px-3 py-1.5 text-xs bg-gray-50 hover:bg-slate-700 border border-gray-200 rounded"
-                    >
-                      ↓ .md
-                    </button>
-                    <button
-                      onClick={() => handleDownloadReport('json')}
-                      className="px-3 py-1.5 text-xs bg-gray-50 hover:bg-slate-700 border border-gray-200 rounded"
-                    >
-                      ↓ .json
-                    </button>
-                  </div>
-                </div>
-
-                {reportData ? (
-                  data?.approvalStatus?.approved ? (
-                    <div className="bg-emerald-950/40 border border-emerald-700 text-emerald-300 px-4 py-3 rounded text-sm">
-                      <div className="font-semibold">✓ APPROVED (BigQuery Source of Truth)</div>
-                      <div className="text-xs mt-1">Approved By: {data?.approvalStatus?.approvedBy || '—'} | Approved At: {data?.approvalStatus?.approvedAt ? new Date(data.approvalStatus.approvedAt).toLocaleString() : '—'} | Run: {data?.approvalStatus?.estimationRunUuid || '—'}</div>
-                    </div>
-                  ) : (
-                    <div className="bg-yellow-950/40 border border-yellow-700 text-yellow-300 px-4 py-2 rounded text-sm font-medium">
-                      ⏳ PENDING APPROVAL (BigQuery) — Review the full estimation below before approving scope.
-                    </div>
-                  )
-                ) : (
-                  <div className="text-gray-500 text-sm">Loading structured report…</div>
-                )}
-              </div>
-
-              {reportError && (
-                <div className="bg-red-950/30 border border-red-700 p-4 rounded text-sm text-red-300">
-                  {reportError}
-                </div>
-              )}
-
-              {reportData && !reportError && (
-                <>
-                  {/* Run Metadata */}
-                  <div className="text-xs text-gray-500 font-mono flex gap-x-6 flex-wrap">
-                    <span>Run: <span className="text-gray-900">{reportData.runUuid?.slice(0, 12)}...</span></span>
-                    <span>Prompt: <span className="text-gray-900">{reportData.promptId}</span></span>
-                    <span>Generated: {reportData.timestamp ? new Date(reportData.timestamp).toLocaleString() : '—'}</span>
-                  </div>
-
-                  {/* Metrics Grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {[
-                      { label: "FUNCTIONAL POINTS", value: `${reportData.summary?.functionalPoints ?? '—'} FP`, sub: reportData.summary?.complexityBand || '' },
-                      { label: "HIGH-SIGNAL REQS", value: reportData.summary?.highSignalReqs ?? '—', sub: "extracted" },
-                      { label: "PROMPT QUALITY", value: `${reportData.summary?.sourceQuality ?? 65}%`, sub: "confidence" },
-                      { label: "TOTAL TOKENS", value: (reportData.tokens?.total ?? 0).toLocaleString(), sub: `${(reportData.tokens?.input ?? reportData.tokens?.inputTokens ?? 0).toLocaleString()} in / ${(reportData.tokens?.output ?? reportData.tokens?.outputTokens ?? 0).toLocaleString()} out` },
-                      { label: "EST. COST (Flash)", value: `$${(reportData.tokens?.costUsd ?? 0).toFixed(4)}`, sub: "Gemini 3.5 Flash" },
-                      { label: "EST. DEV HOURS", value: reportData.tokens?.devHours ?? '—', sub: `× ${reportData.summary?.iterationMultiplier ?? 1.8} multiplier` },
-                    ].map((m, i) => (
-                      <div key={i} className="bg-white border border-gray-200 rounded-xl p-4">
-                        <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">{m.label}</div>
-                        <div className="text-3xl font-semibold text-gray-900 tabular-nums">{m.value}</div>
-                        <div className="text-xs text-gray-500 mt-1">{m.sub}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Model Comparison Table (FIX 1 + FIX 5) */}
-                  <div className="bg-white border border-gray-200 rounded-xl p-6">
-                    <h3 className="font-semibold mb-3">Model Cost Comparison — Same Scope</h3>
-
-                    {/* Provider + Tier filter pills */}
-                    <div style={{display:'flex', flexWrap:'wrap', gap:6, marginBottom:8}}>
-                      <span style={{fontSize:11, color:'#6b7280', alignSelf:'center', marginRight:4}}>Providers:</span>
-                      {['Google','xAI','OpenAI','Anthropic','AWS Bedrock'].map(p => (
-                        <button key={p}
-                          onClick={() => {
-                            const s = new Set(activeProviders);
-                            s.has(p) ? s.delete(p) : s.add(p);
-                            setActiveProviders(s);
-                          }}
-                          style={{
-                            padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600,
-                            cursor:'pointer', border:'1px solid',
-                            background: activeProviders.has(p) ? providerColor(p) : '#ffffff',
-                            color: activeProviders.has(p) ? '#ffffff' : '#6b7280',
-                            borderColor: activeProviders.has(p) ? providerColor(p) : '#e2e6ed',
-                          }}>{p}</button>
-                      ))}
-                      <span style={{width:12}} />
-                      <span style={{fontSize:11, color:'#6b7280', alignSelf:'center', marginRight:4}}>Tiers:</span>
-                      {['fast','reasoning','coding','balanced','premium'].map(t => (
-                        <button key={t}
-                          onClick={() => {
-                            const s = new Set(activeTiers);
-                            s.has(t) ? s.delete(t) : s.add(t);
-                            setActiveTiers(s);
-                          }}
-                          style={{
-                            padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600,
-                            cursor:'pointer', border:'1px solid',
-                            background: activeTiers.has(t) ? tierColor(t) : '#ffffff',
-                            color: activeTiers.has(t) ? '#374151' : '#9ca3af',
-                            borderColor: activeTiers.has(t) ? tierColor(t) : '#e2e6ed',
-                          }}>{t}</button>
-                      ))}
-                    </div>
-
-                    <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
-                      <thead>
-                        <tr style={{borderBottom:'2px solid #e2e6ed', background:'#f8f9fb'}}>
-                          <th style={thStyle}>Model</th>
-                          <th style={thStyle}>Provider</th>
-                          <th style={thStyle}>Tier</th>
-                          <th style={thStyle}>Input /1M</th>
-                          <th style={thStyle}>Output /1M</th>
-                          <th style={thStyle}>Est. Cost ({(reportData.tokens?.total || totalTokens || 0).toLocaleString()} tok)</th>
-                          <th style={thStyle}>vs Baseline</th>
-                          <th style={thStyle}>Context</th>
-                          <th style={thStyle}>Notes</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(reportData.modelComparison || [])
-                          .filter((m: any) => activeProviders.has(m.provider) && activeTiers.has(m.tier || 'balanced'))
-                          .map((m: any) => {
-                            const baseline = (reportData.modelComparison || []).find((x: any) => x.recommended)?.costUsd ?? 0.001;
-                            const mCost = m.costUsd ?? 0;
-                            const ratio = mCost / (baseline || 0.001);
-                            const mult = m.recommended
-                              ? '★ baseline'
-                              : ratio < 0.1
-                                ? `${(ratio * 100).toFixed(0)}% of baseline`
-                                : `${ratio.toFixed(2)}×`;
-                            const tierColors: Record<string, string> = {
-                              fast: '#dbeafe', reasoning: '#fef9c3', coding: '#dcfce7',
-                              balanced: '#f3e8ff', premium: '#fee2e2'
-                            };
-                            return (
-                              <tr key={m.id} style={{
-                                background: m.recommended ? '#eff6ff' : '#ffffff',
-                                borderBottom: '1px solid #f0f2f7'
-                              }}>
-                                <td style={tdStyle}>
-                                  {m.recommended && <span style={{color:'#16a34a', marginRight:4}}>★</span>}
-                                  <strong style={{color:'#1A2B5E'}}>{m.label}</strong>
-                                </td>
-                                <td style={{...tdStyle, color:'#6b7280'}}>{m.provider}</td>
-                                <td style={tdStyle}>
-                                  <span style={{
-                                    background: tierColors[m.tier] ?? '#f3f4f6',
-                                    color: '#374151',
-                                    padding: '2px 8px',
-                                    borderRadius: 12,
-                                    fontSize: 11,
-                                    fontWeight: 600,
-                                  }}>{m.tier}</span>
-                                </td>
-                                <td style={{...tdStyle, fontFamily:'monospace'}}>${m.inputCostPer1M}</td>
-                                <td style={{...tdStyle, fontFamily:'monospace'}}>${m.outputCostPer1M}</td>
-                                <td style={{...tdStyle, fontFamily:'monospace', fontWeight:700, color:'#1A2B5E'}}>
-                                  ${mCost.toFixed(4)}
-                                </td>
-                                <td style={{...tdStyle, color: m.recommended ? '#16a34a' : '#9ca3af'}}>{mult}</td>
-                                <td style={{...tdStyle, color:'#6b7280', fontSize:11}}>{m.contextWindow}</td>
-                                <td style={{...tdStyle, color:'#9ca3af', fontSize:11}}>{m.note}</td>
-                              </tr>
-                            );
-                          })}
-                      </tbody>
-                    </table>
-
-                    {/* FIX 3: dynamic recommendation from actual model data */}
-                    {(() => {
-                      const models = reportData.modelComparison || [];
-                      const recommended = models.find((m: any) => m.recommended);
-                      const cheapestNonBaseline = [...models]
-                        .filter((m: any) => !m.recommended && (m.costUsd || 0) > 0)
-                        .sort((a: any, b: any) => (a.costUsd || 0) - (b.costUsd || 0))[0];
-                      const bestCoding = models.find((m: any) => (m.tier === 'coding' || /grok.*build|codex/i.test(m.label||'')) && !m.recommended);
-                      const recParts = [
-                        `★ Use ${recommended?.label ?? 'Gemini 3.5 Flash'} as your default — best cost/quality balance at $${(recommended?.costUsd ?? 0).toFixed(4)}.`,
-                        cheapestNonBaseline ? `💰 For high-volume batch tasks, ${cheapestNonBaseline.label} costs ${(((cheapestNonBaseline.costUsd || 0) / (recommended?.costUsd || 1)) * 100).toFixed(0)}% of the baseline.` : '',
-                        bestCoding ? `🔧 For complex agentic coding, escalate to ${bestCoding.label} ($${(bestCoding.costUsd || 0).toFixed(4)}).` : '',
-                      ].filter(Boolean);
-                      return <p className="mt-3 text-xs text-[#2563EB] italic">{recParts.join(' ')}</p>;
-                    })()}
-                  </div>
-
-                  {/* FEATURE 3: FP Breakdown by IFPUG Type (5-card grid) */}
-                  {reportData?.fpBreakdown?.by_ifpug_type && (
-                    <div className="bg-white border border-gray-200 rounded-xl p-6">
-                      <h3 className="font-semibold mb-3">Functional Points — IFPUG Type Breakdown</h3>
-                      <div style={{display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:8, marginBottom:12}}>
-                        {Object.entries(reportData.fpBreakdown.by_ifpug_type as Record<string, number>).map(([type, fp]) => {
-                          const total = Object.values(reportData.fpBreakdown.by_ifpug_type as Record<string, number>)
-                            .reduce((sum, value) => sum + (Number(value) || 0), 0)
-                          const pct = total > 0 ? Math.round((fp/total)*100) : 0
-                          const colors: Record<string,string> = {
-                            EI:'#2563EB', EO:'#16a34a', EQ:'#d97706',
-                            ILF:'#8b5cf6', EIF:'#dc2626'
-                          }
-                          const labels: Record<string,string> = {
-                            EI:'External Input', EO:'External Output',
-                            EQ:'External Inquiry', ILF:'Internal Data', EIF:'External Interface'
-                          }
-                          return (
-                            <div key={type} style={{
-                              background:'#f8f9fb', border:'1px solid #e2e6ed',
-                              borderRadius:8, padding:'10px 12px', textAlign:'center'
-                            }}>
-                              <div style={{
-                                fontSize:18, fontWeight:800, color: colors[type] || '#374151'
-                              }}>{fp}</div>
-                              <div style={{
-                                fontSize:10, fontWeight:700, color: colors[type] || '#374151',
-                                marginTop:2
-                              }}>{type}</div>
-                              <div style={{fontSize:10, color:'#9ca3af', marginTop:2}}>
-                                {labels[type] || type}
-                              </div>
-                              <div style={{
-                                height:4, background:'#e2e6ed', borderRadius:2, marginTop:6
-                              }}>
-                                <div style={{
-                                  height:'100%', width:`${pct}%`,
-                                  background: colors[type] || '#e2e6ed', borderRadius:2
-                                }}/>
-                              </div>
-                              <div style={{fontSize:10, color:'#6b7280', marginTop:2}}>{pct}%</div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* FEATURE 3: Token & Cost split by Development Phase (table + bars) */}
-                  {reportData?.phaseBreakdown && (
-                    <div className="bg-white border border-gray-200 rounded-xl p-6">
-                      <h3 className="font-semibold mb-3">Token & Cost Split — by Development Phase</h3>
-                      <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
-                        <thead>
-                          <tr style={{borderBottom:'2px solid #e2e6ed', background:'#f8f9fb'}}>
-                            <th style={thStyle}>Phase</th>
-                            <th style={thStyle}>% of Work</th>
-                            <th style={thStyle}>Tokens</th>
-                            <th style={thStyle}>Est. Cost</th>
-                            <th style={thStyle}>Distribution</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {Object.entries(reportData.phaseBreakdown)
-                            .sort(([,a]: any,[,b]: any) => (b.tokens || 0) - (a.tokens || 0))
-                            .map(([phase, data]: any) => {
-                              const phaseColors: Record<string,string> = {
-                                code_generation:'#2563EB', review:'#d97706',
-                                design:'#16a34a', architecture:'#8b5cf6',
-                                requirements:'#6b7280', documentation:'#9ca3af', testing:'#e5e7eb'
-                              }
-                              const phaseLabels: Record<string,string> = {
-                                code_generation:'Code Generation',
-                                review:'Code Review & Iteration',
-                                design:'Design & Architecture',
-                                architecture:'Architecture',
-                                requirements:'Requirements Analysis',
-                                documentation:'Documentation',
-                                testing:'Testing & Validation'
-                              }
-                              return (
-                                <tr key={phase} style={{borderBottom:'1px solid #f0f2f7'}}>
-                                  <td style={tdStyle}>
-                                    <span style={{
-                                      display:'inline-block', width:8, height:8,
-                                      borderRadius:'50%', background: phaseColors[phase]??'#e2e6ed',
-                                      marginRight:6
-                                    }}/>
-                                    {phaseLabels[phase] ?? phase}
-                                  </td>
-                                  <td style={{...tdStyle, fontWeight:700, color:'#1A2B5E'}}>
-                                    {data.pct || 0}%
-                                  </td>
-                                  <td style={{...tdStyle, fontFamily:'monospace'}}>
-                                    {(data.tokens || 0).toLocaleString()}
-                                  </td>
-                                  <td style={{...tdStyle, fontFamily:'monospace', color:'#16a34a', fontWeight:600}}>
-                                    ${(data.cost_usd || 0).toFixed(4)}
-                                  </td>
-                                  <td style={{...tdStyle}}>
-                                    <div style={{
-                                      height:6, background:'#f0f2f7', borderRadius:3, width:120
-                                    }}>
-                                      <div style={{
-                                        height:'100%', borderRadius:3,
-                                        width:`${data.pct || 0}%`,
-                                        background: phaseColors[phase]??'#e2e6ed'
-                                      }}/>
-                                    </div>
-                                  </td>
-                                </tr>
-                              )
-                            })}
-                        </tbody>
-                      </table>
-                      <p style={{fontSize:11, color:'#9ca3af', marginTop:8, fontStyle:'italic'}}>
-                        Phase split based on IFPUG-adapted token distribution ratios for AI agent development.
-                        Code Generation (45%) and Review (20%) dominate output token cost.
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Collapsible Full Markdown Report */}
-                  {reportData.mdReport && (
-                    <div className="bg-white border border-gray-200 rounded-xl p-6">
-                      <button
-                        onClick={() => setShowMdReport(!showMdReport)}
-                        className="flex w-full items-center justify-between text-left font-semibold"
-                      >
-                        Full Estimation Report (Markdown)
-                        <span>{showMdReport ? '▲' : '▼'}</span>
-                      </button>
-                      {showMdReport && (
-                        <pre className="mt-4 text-xs font-mono bg-slate-950 p-4 rounded border border-gray-200 max-h-[520px] overflow-auto whitespace-pre-wrap">
-                          {reportData.mdReport}
-                        </pre>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Approve + Download Actions */}
-                  <div className="flex flex-wrap gap-3 pt-2">
-                    {!reportData.approved && (
-                      <button
-                        onClick={handleApproveEstimation}
-                        disabled={approving}
-                        className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-gray-900 rounded font-semibold disabled:opacity-60"
-                      >
-                        {approving ? "Approving..." : "✓ Approve this Estimation & Scope"}
-                      </button>
-                    )}
-                    <button onClick={() => handleDownloadReport('md')} className="px-4 py-2 bg-gray-50 hover:bg-slate-700 border border-gray-200 rounded">
-                      ↓ Download .md
-                    </button>
-                    <button onClick={() => handleDownloadReport('json')} className="px-4 py-2 bg-gray-50 hover:bg-slate-700 border border-gray-200 rounded">
-                      ↓ Download .json
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'ai-estimation' && (
-            <>
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-bold text-[#1A2B5E]">AI Estimation</h2>
-                <p className="text-xs text-[#6b7280] mt-1">
-                  Generate or dry-run the cost, token, and development effort estimate for the selected prompt.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  onClick={() => triggerAction('estimate')}
-                  disabled={loading || !selectedUid}
-                  className="flex items-center gap-2 bg-[#2563eb] hover:bg-[#1d4ed8] text-gray-900 text-sm font-semibold px-5 py-2.5 rounded-lg transition shadow-lg disabled:opacity-50"
-                >
-                  <Play className="w-4 h-4" /> Run AI Estimation
-                </button>
-                <button
-                  onClick={() => triggerAction('estimate', true)}
-                  disabled={loading || !selectedUid}
-                  className="flex items-center gap-2 bg-white border border-[#e2e6ed] hover:bg-[#f0f2f7] text-[#1A2B5E] text-sm font-medium px-4 py-2.5 rounded-lg transition disabled:opacity-50"
-                  title="Test estimation without saving results or writing files"
-                >
-                  ▷ Dry Run
-                </button>
-              </div>
             </div>
           </div>
-
-          {/* Action Logs Panel */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <div className="flex items-center gap-2 mb-3 text-[#2563EB] font-bold text-[13px] uppercase tracking-wider">
-              <Terminal className="w-4 h-4" /> &gt;_ Live Execution Output
-            </div>
-            <pre className="overflow-y-auto max-h-[300px] whitespace-pre-wrap leading-relaxed" style={{ background: '#f8f9fb', border: '1px solid #e2e6ed', borderRadius: '8px', color: '#1A2B5E', fontFamily: "'JetBrains Mono', monospace", fontSize: '12px', padding: '16px' }}>
-              {actionLog || 'Ready. Click "Run AI Estimation" or "Refresh from Vertex" to execute background processes...'}
-            </pre>
-
-            {/* FIX 3: Download Report buttons - always available after any estimation run */}
-            <div className="flex flex-wrap gap-2 mt-3">
-              <button
-                onClick={() => handleDownloadReport('md')}
-                className="px-3 py-1.5 text-xs bg-gray-50 hover:bg-slate-700 border border-gray-200 rounded text-gray-600 flex items-center gap-1"
-              >
-                ↓ Download Report (.md)
-              </button>
-              <button
-                onClick={() => handleDownloadReport('json')}
-                className="px-3 py-1.5 text-xs bg-gray-50 hover:bg-slate-700 border border-gray-200 rounded text-gray-600 flex items-center gap-1"
-              >
-                ↓ Download Report (.json)
-              </button>
-              <span className="text-[10px] text-slate-500 self-center ml-2">Reports also saved in sentinel/reports/&lt;prompt_id&gt;/</span>
-            </div>
-
-            {/* Fresh post-run summary — shows the actual numbers from this estimation (not the old cached /api/prompt-data values) */}
-            {latestEstimation && activeTab === 'ai-estimation' && (
-              <div className="bg-white border border-gray-200 rounded-xl p-5 mt-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="text-[#2563EB] text-xs font-bold uppercase tracking-wider flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4" /> Latest Estimation (just ran)
-                    {latestEstimation?.isDryRun && (
-                      <span style={{
-                        background:'#fffbeb', border:'1px solid #fcd34d',
-                        color:'#d97706', padding:'2px 8px', borderRadius:12,
-                        fontSize:11, fontWeight:600, marginLeft:8
-                      }}>DRY RUN — not saved</span>
-                    )}
-                  </div>
-                  <div className="text-[10px] text-slate-500 font-mono">{latestEstimation.runAt?.slice(0,19)}</div>
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-4">
-                  <div className="bg-white border border-[#e2e6ed] rounded-[8px] p-2">
-                    <div className="text-gray-500 text-[10px]">Functional Points</div>
-                    <div className="text-2xl font-extrabold text-[#2563EB]">{latestEstimation.totalFunctionalPoints} <span className="text-xs">FP</span></div>
-                    <div className="text-[#2563EB] text-xs">{latestEstimation.complexityBand} band</div>
-                  </div>
-                  <div className="bg-white border border-[#e2e6ed] rounded-[8px] p-2">
-                    <div className="text-gray-500 text-[10px]">Total Tokens</div>
-                    <div className="text-2xl font-extrabold text-[#1A2B5E]">{(latestEstimation.totalTokens || 0).toLocaleString()}</div>
-                  </div>
-                  <div className="bg-white border border-[#e2e6ed] rounded-[8px] p-2">
-                    <div className="text-gray-500 text-[10px]">Est. Cost (Gemini 3.5 Flash)</div>
-                    <div className="text-2xl font-extrabold text-[#16a34a]">${latestEstimation.estimatedCostUsd}</div>
-                  </div>
-                  <div className="bg-white border border-[#e2e6ed] rounded-[8px] p-2">
-                    <div className="text-gray-500 text-[10px]">High-Signal Requirements</div>
-                    <div className="text-2xl font-extrabold text-[#1A2B5E]">{latestEstimation.requirementCount || 36}</div>
-                  </div>
-                </div>
-
-                {/* Model Recommendations table from the actual estimator output */}
-                {/* FIX 2: use modelComparison attached from the post-estimation /api/models fetch (with real tok) */}
-                {(reportData?.modelComparison?.length > 0 || latestEstimation?.modelComparison?.length > 0 || latestEstimation?.alternativeModelsSummary) && (
-                  <div className="mb-4">
-                    <div className="text-xs text-gray-500 mb-1 font-semibold">Model Cost Recommendations (same scope)</div>
-                    <div className="bg-white border border-gray-200 rounded overflow-hidden">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 text-gray-500">
-                            <th className="text-left px-3 py-2 border-b border-gray-200">Model</th>
-                            <th className="text-left px-3 py-2 border-b border-gray-200">Cost</th>
-                            <th className="text-left px-3 py-2 border-b border-gray-200">vs baseline</th>
-                            <th className="text-left px-3 py-2 border-b border-gray-200">Note</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(reportData?.modelComparison || latestEstimation?.modelComparison || []).map((m: any, i: number) => {
-                            const base = reportData?.tokens?.costUsd || latestEstimation?.estimatedCostUsd || 0.001;
-                            const mCost = m.cost_usd || m.costUsd || 0;
-                            const ratio = mCost / (base || 0.001);
-                            const mult = m.recommended ? "baseline" : (ratio < 0.1 ? `${(ratio*100).toFixed(0)}% of baseline` : `${ratio.toFixed(2)}×`);
-                            return (
-                              <tr key={i} className={`${m.recommended ? 'bg-[#eff6ff]' : 'bg-white'} text-[#1A2B5E]`}>
-                                <td className="px-3 py-2 border-b border-gray-200 font-medium">{m.model || m.label}</td>
-                                <td className="px-3 py-2 border-b border-gray-200 font-mono">${(m.cost_usd ?? m.costUsd ?? 0).toFixed(4)}</td>
-                                <td className="px-3 py-2 border-b border-gray-200">{mult}</td>
-                                <td className="px-3 py-2 border-b border-gray-200 text-gray-600">{m.note}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => handleDownloadReport('md')}
-                    className="px-3 py-1.5 text-xs bg-gray-50 hover:bg-slate-700 border border-gray-200 rounded text-gray-600"
-                  >
-                    View full report (MD)
-                  </button>
-                  <span className="text-[10px] text-slate-500 self-center">Reports also written to sentinel/reports/{latestEstimation.promptId}/</span>
-                </div>
-              </div>
-            )}
-          </div>
-            </>
-          )}
-        </div>
-
-        {/* Right Column Layout */}
-        {activeTab === 'ai-estimation' && (
-        <div className="space-y-8">
-          {/* Scientific Token Stats */}
-          <div className="bg-white border border-gray-200 p-6 rounded-xl">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-gray-500 mb-4 flex items-center gap-2">
-              <Cpu className="w-4 h-4 text-[#2563EB]" /> Token Estimator
-            </h2>
-            <div className="space-y-4">
-              <div>
-                <div className="flex justify-between text-xs text-gray-500 mb-1">
-                  <span>Total Tokens (Gemini 3.5 Flash):</span>
-                  <span className="font-bold text-gray-900">{totalTokens.toLocaleString()}</span>
-                </div>
-                <div className="w-full bg-gray-50 h-1.5 rounded-full overflow-hidden">
-                  <div className="bg-indigo-500 h-full" style={{ width: totalTokens ? '65%' : '0%' }}></div>
-                </div>
-                {tokenSource === 'file_size_estimate' && (
-                  <div style={{
-                    fontSize:10, color:'#d97706',
-                    background:'#fffbeb', border:'1px solid #fcd34d',
-                    borderRadius:8, padding:'3px 8px', marginTop:4,
-                    fontStyle:'italic'
-                  }}>
-                    ⚡ Rough estimate — click Run AI Estimation for exact tokens
-                  </div>
-                )}
-              </div>
-              <div className="pt-2 border-t border-gray-200 text-xs text-gray-500 space-y-2">
-                <div className="flex justify-between">
-                  <span>Input Tokens:</span>
-                  <span className="text-gray-900">{inputTokens.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Output Tokens:</span>
-                  <span className="text-gray-900">{outputTokens.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between border-t border-gray-200 pt-2 mt-2">
-                  <span>Estimated Cost:</span>
-                  <span className="text-emerald-300 font-semibold">${estimatedCost.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Est. Dev Hours:</span>
-                  <span className="text-gray-900">{(tokenEstimate?.devHours || latestEstimation?.devHours || Math.round((totalTokens || 15000) / 10000))} hrs</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Guidelines Card */}
-          <div className="bg-white border border-indigo-950/50 p-6 rounded-xl">
-            <h2 className="text-sm font-bold text-[#2563EB] mb-3 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4" /> Governance Rules
-            </h2>
-            <ul className="space-y-3 text-xs text-gray-500 leading-relaxed list-disc list-inside">
-              <li><strong>Zero Content Loss:</strong> Strict character boundaries matching the Saved Prompt source of truth.</li>
-              <li><strong>SCD Type 2:</strong> Historical state versions are kept intact in BigQuery.</li>
-              <li><strong>Repeat Optimizations:</strong> Auto-skip active when MD5 hashes remain unchanged.</li>
-            </ul>
-          </div>
-        </div>
         )}
 
-      </div>
-
-      {/* BigQuery Approval Flyout (Source of Truth) */}
-      {activeTab === 'report' && (
-      <div className="fixed bottom-4 right-4 z-50 w-[min(92vw,560px)]">
-        <div className={`rounded-xl border shadow-xl p-4 ${data?.approvalStatus?.approved ? 'bg-[#f0fdf4] border-[#86efac] text-[#166534]' : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold">{data?.approvalStatus?.approved ? '✓ APPROVED (BigQuery Source of Truth)' : '⏳ PENDING APPROVAL (BigQuery)'}</div>
-            <button className="text-xs underline" onClick={() => setApprovalFlyoutMinimized(!approvalFlyoutMinimized)}>{approvalFlyoutMinimized ? 'Expand' : 'Minimize'}</button>
+        {/* STAGE 3: CODING AGENT */}
+        {stage === 3 && selectedUid && (
+          <CodingAgentView
+            selectedUid={selectedUid}
+            promptFingerprint={promptFingerprint}
+            onNavigateToGallery={() => setStage(1)}
+          />
+        )}
+        {stage === 3 && !selectedUid && (
+          <div style={{ background: '#fff', border: '1px solid #e2e6ed', borderRadius: 10, padding: 24 }}>
+            <h2 style={{ marginTop: 0 }}>Stage 3 — Coding Agent</h2>
+            <p>Select a prompt from the gallery to generate code.</p>
+            <button
+              onClick={() => setStage(1)}
+              style={{ padding: '8px 16px', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+            >
+              ← Back to Prompt Gallery
+            </button>
           </div>
-          {!approvalFlyoutMinimized && (
-            <div className="text-xs mt-2 space-y-1">
-              <div><span className="text-[#166534]">Table:</span> <span className="font-mono">ctoteam.prism_prompt_catalog.prompt_approvals</span></div>
-              <div><span className="text-[#166534]">Prompt UID:</span> <span className="font-mono">{selectedUid || effectiveSelectedUid || '—'}</span></div>
-              <div><span className="text-[#166534]">Approved By:</span> <span className="font-mono">{data?.approvalStatus?.approvedBy || '—'}</span></div>
-              <div><span className="text-[#166534]">Approved At:</span> <span className="font-mono">{data?.approvalStatus?.approvedAt ? new Date(data.approvalStatus.approvedAt).toLocaleString() : '—'}</span></div>
-              <div><span className="text-[#166534]">Run UUID:</span> <span className="font-mono">{data?.approvalStatus?.estimationRunUuid || '—'}</span></div>
-              {approvalError && (<div className="text-red-300">Error: {approvalError}</div>)}
-            </div>
-          )}
-        </div>
+        )}
       </div>
-      )}
 
+      {/* End of stage-driven content for 3-stage redesign. Old tab content excised. */}
       </main>
       </div>
       </div>

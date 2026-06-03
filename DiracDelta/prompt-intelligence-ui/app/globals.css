@@ -48,11 +48,22 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
 
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
 html, body {
   background-color: var(--bg-page) !important;
   color: var(--text-primary);
   font-family: var(--font-sans);
   margin: 0; padding: 0;
+}
+
+main {
+  margin: 0;
+  padding: 0;
 }
 
 /* Cards */
@@ -204,8 +215,8 @@ html, body {
 
 /* Main content wrapper */
 .main-content {
-  margin-left: var(--sidebar-width);
-  padding: 24px 32px;
+  margin-left: 0;
+  padding: 0;
   min-height: 100vh;
   background: var(--bg-page);
 }
