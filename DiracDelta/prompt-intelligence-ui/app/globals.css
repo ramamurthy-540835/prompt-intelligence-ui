@@ -1,26 +1,261 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Page background — light blue-gray, NOT white */
+  --bg-page:        #f0f2f7;
+  --bg-surface:     #ffffff;
+  --bg-surface-2:   #f8f9fb;
+  --bg-surface-3:   #f0f2f7;
+
+  /* Sidebar */
+  --sidebar-bg:         #ffffff;
+  --sidebar-border:     #e2e6ed;
+  --sidebar-width:      280px;
+  --sidebar-item-hover: #f0f2f7;
+  --sidebar-active-bg:  #eff6ff;
+  --sidebar-active-text:#1d4ed8;
+
+  /* Borders */
+  --border-default: #e2e6ed;
+  --border-muted:   #f0f2f7;
+  --border-active:  #2563eb;
+
+  /* Text */
+  --text-primary:   #1A2B5E;
+  --text-secondary: #6b7280;
+  --text-muted:     #9ca3af;
+  --text-link:      #2563eb;
+  --text-mono:      #6b7280;
+
+  /* Brand */
+  --brand-navy:   #1A2B5E;
+  --brand-orange: #E8531E;
+  --brand-blue:   #2563EB;
+
+  /* Semantic */
+  --color-success:        #16a34a;
+  --color-success-bg:     #f0fdf4;
+  --color-success-border: #86efac;
+  --color-warning:        #d97706;
+  --color-warning-bg:     #fffbeb;
+  --color-warning-border: #fcd34d;
+  --color-danger:         #dc2626;
+  --color-danger-bg:      #fef2f2;
+  --color-danger-border:  #fca5a5;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+html, body {
+  background-color: var(--bg-page) !important;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  margin: 0; padding: 0;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Cards */
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 16px 20px;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Buttons */
+.btn-primary {
+  background: var(--brand-blue);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+.btn-primary:hover { background: #1d4ed8; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-secondary {
+  background: #ffffff;
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+}
+.btn-secondary:hover { background: var(--bg-surface-3); }
+
+/* Pill tabs */
+.pill-tab {
+  background: #ffffff;
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 20px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.pill-tab.active {
+  background: var(--brand-blue);
+  color: #ffffff;
+  border-color: var(--brand-blue);
+}
+
+/* Section labels — orange dash prefix */
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--brand-navy);
+  margin-bottom: 8px;
+}
+.section-label::before {
+  content: '';
+  display: inline-block;
+  width: 20px;
+  height: 2px;
+  background: var(--brand-orange);
+  flex-shrink: 0;
+}
+
+/* Sidebar */
+.adept-sidebar {
+  width: var(--sidebar-width);
+  min-height: 100vh;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  position: fixed;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0;
+  z-index: 10;
+}
+
+.sidebar-brand {
+  padding: 0 20px 20px;
+  border-bottom: 1px solid var(--sidebar-border);
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-brand span:first-child {
+  color: var(--brand-orange);
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: 2px;
+}
+
+.sidebar-brand span:last-child {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+.sidebar-section-label {
+  padding: 0 20px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sidebar-item {
+  display: block;
+  padding: 10px 20px;
+  font-size: 14px;
+  color: var(--text-primary);
+  text-decoration: none;
+  border-radius: 0;
+  transition: background 0.1s;
+}
+
+.sidebar-item:hover {
+  background: var(--sidebar-item-hover);
+}
+
+.sidebar-item.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-text);
+  font-weight: 600;
+  border-right: 3px solid var(--brand-blue);
+}
+
+/* Main content wrapper */
+.main-content {
+  margin-left: var(--sidebar-width);
+  padding: 24px 32px;
+  min-height: 100vh;
+  background: var(--bg-page);
+}
+
+/* Debug bar */
+.debug-bar {
+  background: #f8f9fb;
+  border-bottom: 1px solid var(--border-default);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 16px;
+}
+
+/* Page title */
+.page-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.page-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Metric values */
+.metric-value {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.metric-value.success {
+  color: var(--color-success);
+}
+
+.metric-value.warning {
+  color: var(--color-warning);
+}
+
+.metric-value.cost {
+  color: var(--color-success);
 }

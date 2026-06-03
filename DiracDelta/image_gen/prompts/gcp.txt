@@ -1,0 +1,40 @@
+A professional GCP-native enterprise architecture diagram on a solid white background, illustrating the "Enterprise AI Operating Model for GPC". Clean, modern Google Cloud corporate deck style (McKinsey/Google Cloud architecture slide design).
+
+COLOR PALETTE:
+- Primary: Google Cloud Blue (#1A73E8)
+- Secondary: Google Cloud Grey (#F8F9FA) for panel fills
+- Accents: Google Cloud Red, Yellow, Green as subtle accents for status/data flow
+- Text: Navy Blue (#1F3864) and Charcoal Grey (#3C4043)
+
+STRUCTURE:
+Four horizontal layers stacked vertically, clearly showing the data flow and boundary checks, with a continuous learning loop wrapping around the side.
+
+LAYER 1 (TOP) - Cognitive Intelligence Platform:
+- Background: Light grey rounded card with a blue top border.
+- Left side text: "Cognitive Intelligence Platform (Google)"
+- Center: Official Google Gemini spark icon and Vertex AI icon. 
+- Right side bullet points: "Foundation Models", "Orchestration Tooling", "Vertex AI Agent Builder"
+
+LAYER 2 - Active Governance Envelope:
+- Background: Light grey rounded card with a red/orange top border (representing security).
+- Left side text: "Active Governance Envelope (Shared GPC + Google)"
+- Center: Official Google Cloud Identity & Access Management (IAM) shield icon and VPC security icon.
+- Right side bullet points: "VPC Boundaries", "IAM Policies", "Human-in-the-Loop Approval Checks"
+
+LAYER 3 - Enterprise Knowledge Fabric:
+- Background: Light grey rounded card with a blue top border.
+- Left side text: "Enterprise Knowledge Fabric (Mastech + GPC)"
+- Center: Vertex AI Vector Search icon and custom semantic knowledge graph node icon.
+- Right side bullet points: "GPC Supply Chain Ontology", "Unified Business Glossary", "Semantic Mapping"
+
+LAYER 4 (BOTTOM) - Systems of Operational Truth:
+- Background: Light grey rounded card with a grey top border.
+- Left side text: "Systems of Operational Truth (GPC)"
+- Center: Official Google BigQuery 3-ring database icon and an API gateway (Apigee) icon pointing to ERP.
+- Right side bullet points: "BigQuery Data Warehouses", "ERP Transaction Systems", "Execution APIs"
+
+FLOW & DETAILS:
+- Clean, thin vertical arrows in Google Cloud Blue connect the layers vertically (Data flows from Systems -> EKF -> Governance -> Gemini -> Action).
+- On the far right, a vertical looping arrow labeled "Continuous Learning Loop" links Layer 1 back to Layer 3 and 4.
+- Bottom footer: Thin blue rule with "Grounded & Governed Enterprise AI Architecture | Powered by Google Cloud" in a small sans-serif font.
+- No gradients, no dark backgrounds, no 3D elements, flat vector style.

@@ -1,95 +1,83 @@
 import { NextResponse } from 'next/server';
-import { BigQuery } from '@google-cloud/bigquery';
+
+const SENTINEL_BASE = process.env.SENTINEL_BACKEND_URL ?? 'http://10.100.15.31:8005';
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const selectedUid = searchParams.get('promptUid') || '';
-  
-  const bq = new BigQuery({ projectId: 'ctoteam' });
-
   try {
-    // 1. Fetch all distinct prompt UIDs to populate the dropdown selection list
-    const listQuery = `
-      SELECT DISTINCT prompt_uid 
-      FROM \`ctoteam.prism_prompt_catalog.prompt_versions\`
-      ORDER BY prompt_uid;
-    `;
-    const [listRows] = await bq.query({ query: listQuery });
-    const availablePrompts = listRows.map(r => r.prompt_uid);
+    const { searchParams } = new URL(request.url);
+    const selectedUid = searchParams.get('promptUid') || 'vertexai:3381323161097207808';
 
-    // Default to a fallback standard ID if database list is empty
+    const promptsRes = await fetch(`${SENTINEL_BASE}/api/prompts`);
+    const promptsJson = await promptsRes.json();
+    const prompts = Array.isArray(promptsJson.prompts) ? promptsJson.prompts : [];
+
+    const availablePrompts = prompts.map((p: any) => p.uid).filter(Boolean);
     const activeUid = selectedUid || availablePrompts[0] || 'vertexai:3381323161097207808';
-    const sourcePromptId = activeUid.split(':').pop() || activeUid;
 
-    // 2. Fetch the latest active version metadata (SCD Type 2)
-    const versionQuery = `
-      SELECT 
-        prompt_uid,
-        source_prompt_id as prompt_id,
-        version_number, 
-        run_id, 
-        repeat_mode, 
-        valid_from,
-        chunk_count, 
-        user_message_count, 
-        model_message_count,
-        raw_size_bytes, 
-        extracted_chars, 
-        status, 
-        system_present
-      FROM \`ctoteam.prism_prompt_catalog.prompt_versions\`
-      WHERE prompt_uid = @prompt_uid AND is_current = TRUE
-      LIMIT 1;
-    `;
-    const [versionRows] = await bq.query({ 
-      query: versionQuery,
-      params: { prompt_uid: activeUid }
-    });
-    const latestVersion = versionRows[0] || null;
+    const promptDataRes = await fetch(`${SENTINEL_BASE}/api/prompt-data?uid=${encodeURIComponent(activeUid)}`);
+    const promptData = await promptDataRes.json();
 
-    // 3. Fetch the latest AI estimation from BigQuery
-    let estimation = null;
+    let reportData: any = null;
     try {
-      const estimationQuery = `
-        SELECT 
-          estimated_tokens, actual_loc, confidence_score,
-          raw_json, created_at
-        FROM \`ctoteam.prism_sentinel_estimation.ai_development_estimates\`
-        WHERE prompt_id = @prompt_id
-        ORDER BY created_at DESC
-        LIMIT 1;
-      `;
-      const [estRows] = await bq.query({ 
-        query: estimationQuery,
-        params: { prompt_id: sourcePromptId }
-      });
-      if (estRows.length > 0) {
-        estimation = estRows[0];
-      }
-    } catch (e: any) {
-      console.warn("Estimates table query skipped or empty:", e.message);
+      const reportRes = await fetch(`${SENTINEL_BASE}/api/report-data?uid=${encodeURIComponent(activeUid)}`);
+      if (reportRes.ok) reportData = await reportRes.json();
+    } catch {
+      reportData = null;
     }
 
-    // 4. Fetch recent state machine audit events
-    const eventsQuery = `
-      SELECT event_type, lifecycle_status, repeat_mode, severity, created_at
-      FROM \`ctoteam.prism_prompt_catalog.prompt_events\`
-      WHERE prompt_uid = @prompt_uid
-      ORDER BY created_at DESC
-      LIMIT 15;
-    `;
-    const [eventsRows] = await bq.query({ 
-      query: eventsQuery,
-      params: { prompt_uid: activeUid }
-    });
+    const latestVersion = {
+      prompt_uid: activeUid,
+      prompt_id: promptData.promptId,
+      version_number: promptData.activeVersion ?? 1,
+      run_id: reportData?.runUuid ?? '',
+      repeat_mode: promptData.repeatMode ?? 'cached',
+      valid_from: promptData.lastEstimationAt ?? null,
+      // For this UI card, use the extracted high-signal requirement count from report
+      // (the previous hardcoded/mock value of 1 was misleading).
+      chunk_count: reportData?.summary?.highSignalReqs ?? 0,
+      user_message_count: 0,
+      model_message_count: 0,
+      raw_size_bytes: 0,
+      extracted_chars: 0,
+      status: 'success',
+      system_present: promptData.hasSystemInstructions ?? false,
+      extracted_hash: promptData.extractionHash ?? ''
+    };
+
+    
+    let approvalStatus: any = null;
+    try {
+      const approvalRes = await fetch(`${SENTINEL_BASE}/api/approval-status?uid=${encodeURIComponent(activeUid)}`);
+      if (approvalRes.ok) approvalStatus = await approvalRes.json();
+    } catch {
+      approvalStatus = null;
+    }
+
+    const estimation = {
+      estimation_run_uuid: reportData?.runUuid ?? '',
+      total_functional_points: promptData.functionalPoints ?? reportData?.summary?.functionalPoints ?? null,
+      complexity_band: promptData.complexityBand ?? reportData?.summary?.complexityBand ?? null,
+      estimated_input_tokens: promptData?.tokenEstimate?.inputTokens ?? reportData?.tokens?.input ?? 0,
+      estimated_output_tokens: promptData?.tokenEstimate?.outputTokens ?? reportData?.tokens?.output ?? 0,
+      estimated_total_tokens: promptData?.tokenEstimate?.totalTokens ?? reportData?.tokens?.total ?? 0,
+      estimated_total_cost_usd: promptData?.tokenEstimate?.estimatedCostUsd ?? reportData?.tokens?.costUsd ?? 0,
+      model_used: 'gemini-3.5-flash',
+      source_type: reportData ? 'sentinel_report' : 'prompt_data',
+      source_quality_score: (reportData?.summary?.sourceQuality ?? promptData.sourceQuality ?? 70) / 100,
+      created_at: promptData.lastEstimationAt ?? reportData?.timestamp ?? null
+    };
 
     return NextResponse.json({
       success: true,
       activeUid,
-      availablePrompts,
+      availablePrompts: availablePrompts.length ? availablePrompts : [activeUid],
       latestVersion,
       estimation,
-      events: eventsRows
+      audit: null,
+      events: [],
+      authError: null,
+      isFallback: promptsJson.source !== 'bigquery',
+      approvalStatus
     });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

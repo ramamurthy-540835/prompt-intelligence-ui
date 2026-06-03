@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1792 1024" width="1792" height="1024">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#4285F4"/>
+    </marker>
+    <marker id="arrowGray" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#5F6368"/>
+    </marker>
+  </defs>
+  <rect width="1792" height="1024" fill="#FFFFFF"/>
+  <!-- Header -->
+  <rect x="64" y="32" width="1664" height="72" rx="12" ry="12" fill="#0C447C"/>
+  <text x="896" y="78" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#FFFFFF" text-anchor="middle">AdeptThinExecutorLambda — PRODUCTION Execution Flow</text>
+  <!-- Layer 1: Entry -->
+  <rect x="96" y="128" width="1600" height="64" rx="10" ry="10" fill="#E8EAED" stroke="#5F6368" stroke-width="2"/>
+  <text x="120" y="168" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#202124">[START] lambda_handler(event, context)</text>
+  <!-- Arrow -->
+  <line x1="896" y1="192" x2="896" y2="216" stroke="#4285F4" stroke-width="3" marker-end="url(#arrow)"/>
+  <!-- Layer 2: Parse &amp; Sync (Google Cloud Blue) -->
+  <rect x="96" y="224" width="780" height="92" rx="10" ry="10" fill="#E8F0FE" stroke="#4285F4" stroke-width="2"/>
+  <text x="116" y="258" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#1967D2">[1] PARSE EVENT + [2] SYNC APPROVALS</text>
+  <text x="116" y="282" font-family="Arial, sans-serif" font-size="13" fill="#202124">Detect caller • Snowflake → DynamoDB mirror</text>
+  <text x="116" y="300" font-family="Arial, sans-serif" font-size="13" fill="#202124">Tables: adept-thick-runs, adept-thick-registry</text>
+  <!-- Layer 3: Navy Hero EKF / Governance -->
+  <rect x="916" y="224" width="780" height="92" rx="10" ry="10" fill="#1A237E" stroke="#0D47A1" stroke-width="2"/>
+  <text x="936" y="258" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">[7] PROACTIVE GOVERNANCE + [3] SPECIAL STEPS</text>
+  <text x="936" y="282" font-family="Arial, sans-serif" font-size="13" fill="#E8EAED">HITL approval • SNS_APPROVALS_TOPIC • Block destructive ops</text>
+  <text x="936" y="300" font-family="Arial, sans-serif" font-size="13" fill="#E8EAED">Navy EKF Layer — Enterprise Governance</text>
+  <!-- Arrow down -->
+  <line x1="896" y1="316" x2="896" y2="340" stroke="#4285F4" stroke-width="3" marker-end="url(#arrow)"/>
+  <!-- Layer 4: Core Execution (Blue) -->
+  <rect x="96" y="348" width="1600" height="108" rx="10" ry="10" fill="#E8F0FE" stroke="#4285F4" stroke-width="2"/>
+  <text x="116" y="382" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#1967D2">[4-6] GUARD • RUN TRACKING • OBSERVABILITY</text>
+  <text x="116" y="404" font-family="Arial, sans-serif" font-size="13" fill="#202124">[8] BUDGET CHECK • [9] COMPLEXITY ASSESSMENT (Step Functions vs Snowflake)</text>
+  <text x="116" y="426" font-family="Arial, sans-serif" font-size="13" fill="#202124">[10] CALL SNOWFLAKE AGENT V2 (900s timeout) • Tools from DynamoDB registry</text>
+  <!-- Arrow -->
+  <line x1="896" y1="456" x2="896" y2="480" stroke="#4285F4" stroke-width="3" marker-end="url(#arrow)"/>
+  <!-- Layer 5: Post-Execution (Teal/Gray) -->
+  <rect x="96" y="488" width="1600" height="108" rx="10" ry="10" fill="#E8F5E9" stroke="#34A853" stroke-width="2"/>
+  <text x="116" y="522" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#0D652D">[11-16] UPDATE DB • REPLICATE STEPS • POST-EXEC AUDIT • MEMORY</text>
+  <text x="116" y="544" font-family="Arial, sans-serif" font-size="13" fill="#202124">adept-thick-runs • adept-thick-evaluations • adept-thick-memory</text>
+  <text x="116" y="566" font-family="Arial, sans-serif" font-size="13" fill="#202124">Cost model: $0.003/step + $0.0003/sec • Budget thresholds 80/95/100%</text>
+  <!-- Arrow -->
+  <line x1="896" y1="596" x2="896" y2="620" stroke="#4285F4" stroke-width="3" marker-end="url(#arrow)"/>
+  <!-- Layer 6: Publish &amp; Return (Gray Governance) -->
+  <rect x="96" y="628" width="1600" height="92" rx="10" ry="10" fill="#F1F3F4" stroke="#5F6368" stroke-width="2"/>
+  <text x="116" y="662" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#202124">[17] PUBLISH EVENTS • [18] BUILD RESPONSE</text>
+  <text x="116" y="684" font-family="Arial, sans-serif" font-size="13" fill="#202124">EventBridge: adept-aurora-bus • CloudWatch metrics • SNS_ALERTS_TOPIC</text>
+  <text x="116" y="706" font-family="Arial, sans-serif" font-size="13" fill="#202124">Return: Bedrock / Step Functions / CLI format</text>
+  <!-- Continuous Learning Loop -->
+  <rect x="96" y="760" width="1600" height="72" rx="10" ry="10" fill="#E8EAED" stroke="#5F6368" stroke-width="2"/>
+  <path d="M200 796 Q896 740 1592 796" fill="none" stroke="#34A853" stroke-width="4" stroke-dasharray="8,4"/>
+  <circle cx="200" cy="796" r="8" fill="#34A853"/>
+  <circle cx="1592" cy="796" r="8" fill="#34A853"/>
+  <text x="896" y="818" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#0D652D" text-anchor="middle">CONTINUOUS LEARNING LOOP — Memory-Augmented Prompting + Evaluation Feedback</text>
+  <!-- Legend -->
+  <rect x="96" y="864" width="1600" height="128" rx="10" ry="10" fill="#FAFAFA" stroke="#DADCE0" stroke-width="1"/>
+  <text x="120" y="894" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#202124">LEGEND</text>
+  <rect x="120" y="910" width="24" height="18" rx="3" fill="#E8F0FE" stroke="#4285F4"/>
+  <text x="152" y="924" font-family="Arial, sans-serif" font-size="12" fill="#202124">Google Cloud Blue — Core Execution</text>
+  <rect x="420" y="910" width="24" height="18" rx="3" fill="#1A237E"/>
+  <text x="452" y="924" font-family="Arial, sans-serif" font-size="12" fill="#202124">Navy EKF — Governance Layer</text>
+  <rect x="720" y="910" width="24" height="18" rx="3" fill="#F1F3F4" stroke="#5F6368"/>
+  <text x="752" y="924" font-family="Arial, sans-serif" font-size="12" fill="#202124">Gray — Entry / Publish / Governance</text>
+  <rect x="1020" y="910" width="24" height="18" rx="3" fill="#E8F5E9" stroke="#34A853"/>
+  <text x="1052" y="924" font-family="Arial, sans-serif" font-size="12" fill="#202124">Green — Post-Execution Pipeline</text>
+  <text x="120" y="960" font-family="Arial, sans-serif" font-size="12" fill="#5F6368">AWS Services: DynamoDB • EventBridge • CloudWatch • SNS • Snowflake REST API • Step Functions</text>
+  <text x="120" y="980" font-family="Arial, sans-serif" font-size="11" fill="#80868B">Version 1.0 • Boardroom-Ready Enterprise Architecture • White background • Clean rounded rectangles</text>
+</svg>

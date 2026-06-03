@@ -1,0 +1,80 @@
+{
+  "default_model": "grok-fast",
+  "models": {
+    "grok-fast": {
+      "display_name": "Grok 4.0 Fast Non-Reasoning",
+      "api_model_id": "grok-4-fast",
+      "provider": "xai",
+      "region": "global",
+      "use_case": "fast coding, SQL, shell, refactor, general chat",
+      "aider_supported": true,
+      "recommended": true,
+      "cost_per_mtok": 2.0,
+      "tokens_per_min": 100000
+    },
+    "grok-reasoning": {
+      "display_name": "Grok 4.0 Reasoning",
+      "api_model_id": "grok-4-fast",
+      "provider": "xai",
+      "region": "global",
+      "use_case": "architecture, debugging, deep reasoning, complex problem solving",
+      "aider_supported": true,
+      "cost_per_mtok": 2.0,
+      "tokens_per_min": 80000
+    },
+    "gemini-flash": {
+      "display_name": "Gemini 3.5 Flash",
+      "api_model_id": "gemini-3.5-flash",
+      "provider": "vertex",
+      "region": "global",
+      "use_case": "large context, repository refactor, production coding, documentation",
+      "aider_supported": true,
+      "cost_per_mtok": 0.3,
+      "tokens_per_min": 150000,
+      "cache_friendly": true
+    },
+    "gemini-pro": {
+      "display_name": "Gemini 2.5 Pro",
+      "api_model_id": "gemini-2.5-pro",
+      "provider": "vertex",
+      "region": "global",
+      "use_case": "final architecture review, multi-agent orchestration",
+      "aider_supported": true,
+      "cost_per_mtok": 1.25,
+      "tokens_per_min": 100000,
+      "cache_friendly": true
+    },
+    "claude-sonnet": {
+      "display_name": "Claude 4 Sonnet",
+      "api_model_id": "claude-sonnet-4-6",
+      "provider": "anthropic",
+      "region": "global",
+      "use_case": "code generation, detailed analysis, balanced performance/cost",
+      "aider_supported": true,
+      "cost_per_mtok": 3.0,
+      "tokens_per_min": 50000,
+      "cache_friendly": true
+    },
+    "claude-opus": {
+      "display_name": "Claude 4 Opus",
+      "api_model_id": "claude-opus-4-7",
+      "provider": "anthropic",
+      "region": "global",
+      "use_case": "architect-level reasoning, complex system design, final QA",
+      "aider_supported": false,
+      "cost_per_mtok": 15.0,
+      "tokens_per_min": 30000,
+      "cache_friendly": true
+    },
+    "gpt-4o": {
+      "display_name": "GPT-4o",
+      "api_model_id": "gpt-4o",
+      "provider": "openai",
+      "region": "global",
+      "use_case": "general enterprise tasks, fallback routing, multimodal analysis",
+      "aider_supported": false,
+      "cost_per_mtok": 5.0,
+      "tokens_per_min": 60000
+    }
+  }
+}
